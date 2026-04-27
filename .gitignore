@@ -1,0 +1,29 @@
+# Keil / embedded build outputs
+**/Objects/
+**/Listings/
+**/*.o
+**/*.d
+**/*.crf
+**/*.axf
+**/*.hex
+**/*.map
+**/*.lst
+**/*.htm
+**/*.lnp
+**/*.dep
+
+# Debugger / IDE local state
+**/JLinkLog.txt
+**/JLinkSettings.ini
+**/*.uvguix.*
+**/*.uvguix*
+
+# Word temporary lock files
+~$*.docx
+
+# Local CAN tool binaries/installers
+CAN报文软件/*.exe
+CAN报文软件/*.dll
+
+# Local archives
+*.zip
