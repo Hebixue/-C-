@@ -5,7 +5,7 @@
 - 工作目录：`C:\Users\ALCA\Desktop\CCCC\software`
 - 当前主要工程：`PE_Demo\PE2\02_LF_RF`
 - 当前策略：保留 `02_LF_RF_原版` 的 LF/RF 主链路，在其基础上加入 CAN、继电器、三类 CAN 报文、RSSI 去重与缓存。
-- 门把手相关代码暂时没有继续集成到当前主线，避免再次破坏 LF/RF 路径。
+- 当前已经把 `03_Handle` 中 LED1 对应的门把手 DH0 触发逻辑最小移植到 `02_LF_RF`，并将 LF 从一直轮询改为“门把手触发后限时轮询”。
 
 ## 当前主循环行为
 
@@ -14,16 +14,103 @@
 当前主循环核心逻辑：
 
 1. `CAN_App_Task()` 持续跑，用于从 CAN 应用队列里取帧并发送。
-2. `LF_timerOutFlag` 置位后：
-   - 清标志；
-   - 调用 `SendLFWakeUp()`；
-   - 发送一帧 `0x301`，状态为 `PKES_SYS_LF_WAKEUP`；
+2. 空闲时不再持续 LF 轮询，而是等待门把手 DH0 事件。
+3. 检测到门把手 DH0 后：
+   - `LED1_ON`；
+   - 启动约 `1.5s` 的 LF 轮询窗口；
+   - LF 轮询窗口内每 `85ms` 调用一次 `SendLFWakeUp()`；
+   - 每次 LF 发送后发送一帧 `0x301`，状态为 `PKES_SYS_LF_WAKEUP`；
    - 天线编号 `active_antenna` 按 `1,2,3,4` 循环；
    - 调用 `PKES_Core_UpdateTick()`。
-3. RF 收到完整 5 字节后：
+4. LF 轮询窗口结束后：
+   - 停止 LF 定时器；
+   - `LED1_OFF`；
+   - 将 `NRES` 拉低，再拉高；
+   - 重新执行门把手 DH 初始化。
+5. RF 收到完整 5 字节后：
    - 从 `gRf_Buf[0..4]` 复制到本地 `buf[5]`；
    - 清 `gRFFull`；
    - 调用 `PKES_Core_ProcessRFData(buf)`。
+
+## 门把手触发 LF 轮询
+
+当前已将 `PE_Demo\PE2\03_Handle` 中 LED1 对应的门把手 DH0 逻辑移植到 `PE_Demo\PE2\02_LF_RF\User\main.c`。
+
+注意：本轮移植按用户要求做最小改动，没有加入额外 IRQ 锁存、完整 rearm 状态机或复杂恢复逻辑。
+
+当前新增关键函数：
+
+```c
+static void DH_Init(void);
+static uint8_t DH_GetEvent(void);
+static void DH_ClearEvent(void);
+static void DH_StartLFWindow(void);
+static void DH_StopLFWindow(void);
+```
+
+门把手触发条件：
+
+```c
+if ((GPIO_DRV_ReadPins(IRQ_GPIO) & (1u << IRQ_PIN)) != 0u)
+{
+    uint8_t event = DH_GetEvent();
+    if ((event & 0x01u) != 0u)
+    {
+        LED1_ON;
+        DH_StartLFWindow();
+    }
+}
+```
+
+LF 窗口长度：
+
+```c
+#define HANDLE_LF_POLL_TICKS 18u
+```
+
+因为 LF 定时器周期是 `85ms`：
+
+```text
+18 * 85ms = 1530ms
+```
+
+即约 `1.5s`。
+
+### NRES 时序
+
+用户特别强调：`NRES` 是低频天线驱动和门把手功能的初始化关键脚。当前代码按如下方式处理：
+
+1. 上电初始化时：
+
+```text
+NRES = 1
+DH_Init()
+DH_ClearEvent()
+RFS/checkStatus
+```
+
+2. 门把手触发并准备进入 LF 轮询时：
+
+```text
+停止 LF 定时器
+NRES = 0
+NRES = 1
+启动 1.5s LF 轮询窗口
+立即置 LF_timerOutFlag = 1，马上发第一帧 LF
+```
+
+3. LF 轮询窗口结束时：
+
+```text
+停止 LF 定时器
+NRES = 0
+NRES = 1
+DH_Init()
+DH_ClearEvent()
+RFS/checkStatus
+```
+
+这样做的目的：从 DH 检测链路切到 LF 发送链路前，先通过 `NRES` 复位释放 ATA5293 状态；LF 发送窗口结束后再复位并重新进入门把手检测。
 
 ## LF 轮询周期
 
@@ -41,7 +128,7 @@ timerConfig.period = 85000U;
 85 ms / 次 LF
 ```
 
-当前仍然轮询 4 根天线：
+当前 LF 不是一直运行，而是在门把手触发后的 1.5s 窗口内轮询 4 根天线：
 
 ```text
 天线1 -> 天线2 -> 天线3 -> 天线4 -> ...
@@ -53,7 +140,7 @@ timerConfig.period = 85000U;
 85ms * 4 = 340ms
 ```
 
-如果只接入一根天线，理论上该天线的有效 RSSI 上报周期约为 `340ms`，即 `2.9 帧/s`。
+如果只接入一根天线，且处于 LF 轮询窗口内，理论上该天线的有效 RSSI 上报周期约为 `340ms`，即 `2.9 帧/s`。
 
 ## LF 发送函数
 
@@ -145,12 +232,51 @@ frame.seq = s_can_seq++;
 
 当前 `0x301` 主要来源：
 
-- 每次 LF 轮询后发送 `PKES_SYS_LF_WAKEUP`，约 `11.8 帧/s`；
+- 门把手触发后的 1.5s LF 窗口内，每次 LF 轮询后发送 `PKES_SYS_LF_WAKEUP`，约 `11.8 帧/s`；
 - 每收到一条去重后的有效 RSSI 后发送 `PKES_SYS_RF_RECEIVED`，单天线约 `2~3 帧/s`；
 - 主动开锁/闭锁时发送执行结果；
 - 初始化/心跳状态也可能发送。
 
-因此只接一根天线时，当前实测 `0x301` 约 `13~15 帧/s` 是合理的。
+因此只接一根天线并触发门把手后，当前实测 `0x301` 约 `13~15 帧/s` 是合理的。
+
+### 0x301 常见帧解释
+
+门把手触发 LF 窗口时，常见 `0x301` 数据如：
+
+```text
+2F 02 01 00 03 03 01 00
+30 02 01 00 04 03 01 00
+31 02 01 00 01 03 01 00
+32 02 01 00 02 03 01 00
+```
+
+含义：
+
+```text
+Byte0: 计数递增
+Byte1: 02 = PKES_SYS_LF_WAKEUP
+Byte2: 01 = PKES_STATUS_LF_WAKEUP_OK
+Byte3: 00 = 区域未知
+Byte4: 当前 LF 轮询天线编号
+Byte5: 03 = 门锁保持不变
+Byte6: 01 = PKES_TRIGGER_HANDLE，触发源为门把手
+Byte7: 00 = 无额外标志
+```
+
+收到有效 RSSI 时，常见 `0x301` 数据如：
+
+```text
+33 04 03 00 02 03 00 06
+```
+
+含义：
+
+```text
+Byte1: 04 = PKES_SYS_RF_RECEIVED
+Byte2: 03 = PKES_STATUS_FRAME_VALID
+Byte4: RSSI 对应天线编号
+Byte7: 06 = PKES_FLAG_CRC_OK | PKES_FLAG_RSSI_VALID
+```
 
 ### 0x302 钥匙信息与 RSSI 帧
 
@@ -283,6 +409,8 @@ typedef struct
 用户实测当前结果：
 
 - 只接一根天线；
+- 门把手触发后，天线启动；
+- 触发后 `0x301` 会连续发送一串 `LF_WAKEUP` 状态帧；
 - `0x302` 帧率约 `2~3 帧/s`；
 - `0x302` 每次发送间隔约 `340ms`；
 - `0x301` 帧率约 `13~15 帧/s`。
@@ -320,7 +448,7 @@ typedef struct
 - 不要把 `CAN_APP_REPEAT_COUNT = 1u` 理解为额外发送 1 次，它表示总共发送 1 次。
 - 不要把 `0x302` 的 Byte1/Byte2 当成计数，它们是 RSSI 小端值。
 - `0x301` 的 Byte0 是计数，跳变可能来自 CAN 软件只显示同 ID 最新帧，也可能因为实际帧率较高。
-- 当前 LF 仍是定时轮询，不是门把手触发 LF。
-- 门把手代码之前集成后曾导致 LF/RF 路线异常，后续若重新集成，应优先保持当前原版 LF/RF 主链路不变。
+- 当前 LF 已改为门把手触发后的限时轮询，不再是一直定时轮询。
+- 门把手触发进入 LF 前和 LF 完成回到 DH 前，都处理了 `NRES` 拉低/拉高。
+- 本轮门把手移植按用户要求没有加 IRQ 锁存和完整 rearm；后续若出现多次触发失效，再考虑恢复完整状态机。
 - 如果只接一根天线但 `0x302` 明显高于 3 帧/s，应优先检查 RF 重复包去重是否失效，或 CAN 软件是否统计重复显示。
-
