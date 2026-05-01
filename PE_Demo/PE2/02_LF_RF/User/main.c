@@ -162,6 +162,8 @@ static void DH_StopLFWindow(void)
     LED1_OFF;
     LED2_OFF;
     Lock_App_RefreshLedState();
+    PKES_Core_FinalizeHandleRanging(TIMER_GetMillis());
+    PKES_Core_EndHandleRanging();
 
     ATA5293_Disable();
     ATA5293_Enable();
@@ -235,6 +237,7 @@ int main(void)
                     }
                     if (region_code != PKES_REGION_UNKNOWN)
                     {
+                        PKES_Core_StartHandleRanging(region_code);
                         DH_StartLFWindow(region_code);
                     }
                 }
@@ -250,29 +253,30 @@ int main(void)
             {
                 if (lf_poll_stop_pending != 0u)
                 {
-                    DH_StopLFWindow();
-                    continue;
+                    lf_poll_stop_pending = 2u;
                 }
-
-                SendLFWakeUp();
-                CAN_App_SendSysState(PKES_SYS_LF_WAKEUP,
-                                     PKES_STATUS_LF_WAKEUP_OK,
-                                     handle_region_code,
-                                     active_antenna,
-                                     PKES_LOCK_KEEP,
-                                     PKES_TRIGGER_HANDLE,
-                                     0u);
-
-                ant_poll_idx = (uint8_t)((ant_poll_idx + 1u) % ANTENNA_COUNT);
-                active_antenna = antenna_list[ant_poll_idx];
-
-                if (lf_poll_ticks > 0u)
+                else
                 {
-                    lf_poll_ticks--;
-                }
-                if (lf_poll_ticks == 0u)
-                {
-                    lf_poll_stop_pending = 1u;
+                    SendLFWakeUp();
+                    CAN_App_SendSysState(PKES_SYS_LF_WAKEUP,
+                                         PKES_STATUS_LF_WAKEUP_OK,
+                                         handle_region_code,
+                                         active_antenna,
+                                         PKES_LOCK_KEEP,
+                                         PKES_TRIGGER_HANDLE,
+                                         0u);
+
+                    ant_poll_idx = (uint8_t)((ant_poll_idx + 1u) % ANTENNA_COUNT);
+                    active_antenna = antenna_list[ant_poll_idx];
+
+                    if (lf_poll_ticks > 0u)
+                    {
+                        lf_poll_ticks--;
+                    }
+                    if (lf_poll_ticks == 0u)
+                    {
+                        lf_poll_stop_pending = 1u;
+                    }
                 }
             }
         }
@@ -299,6 +303,11 @@ int main(void)
         {
             PKES_Core_ProcessRFData(buf);
             got_data = 0u;
+        }
+
+        if (lf_poll_stop_pending == 2u)
+        {
+            DH_StopLFWindow();
         }
     }
 }

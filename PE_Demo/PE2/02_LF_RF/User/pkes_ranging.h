@@ -11,10 +11,11 @@ extern "C" {
 #define PKES_RANGING_MIN_CM 9u
 #define PKES_RANGING_MAX_CM 179u
 #define PKES_RANGING_TOO_FAR_CM 180u
+#define PKES_RANGING_MISSING_RSSI_RAW 616u
 
-/* Temporary region thresholds. Recalibrate these with vehicle-level requirements. */
-#define PKES_RANGING_NEAR_CM 80u
-#define PKES_RANGING_BOUNDARY_CM 120u
+/* 4-antenna decision thresholds, unit: cm. */
+#define PKES_RANGING_AXIS_CENTER_CM 40u
+#define PKES_RANGING_AXIS_SIDE_CM 55u
 
 typedef enum
 {
@@ -49,6 +50,19 @@ uint8_t PKES_Ranging_GetRangeState(uint16_t rssi_raw);
 
 /* Decide a 0x303 region code from distance and an optional business/handle hint. */
 uint8_t PKES_Ranging_DecideRegion(uint8_t region_hint, uint16_t distance_cm);
+
+/* Decide a fused RegionCode from Ant1/2/3/4 distances.
+ * Ant1=left, Ant2=right, Ant3=front, Ant4=rear. Unknown includes diagonal masked zones
+ * and the hysteresis band between center and side thresholds.
+ */
+uint8_t PKES_Ranging_DecideRegionFromDistances(const uint16_t distance_cm[4]);
+
+/* Decide a fused RegionCode from Ant1/2/3/4 RSSI using the calibrated template table.
+ * Ant1=left, Ant2=right, Ant3=front, Ant4=rear.
+ * Missing antennas should be filled with PKES_RANGING_MISSING_RSSI_RAW.
+ */
+uint8_t PKES_Ranging_DecideRegionFromRssi(const uint16_t rssi_raw[4],
+                                          const uint16_t distance_cm[4]);
 
 /* Full ranging path: RSSI -> distance -> region. */
 void PKES_Ranging_Evaluate(uint8_t antenna_id,

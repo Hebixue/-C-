@@ -10,6 +10,15 @@ extern "C" {
 /* 初始化 PKES 业务状态，例如默认 LF 天线编号和指示灯节拍。 */
 void PKES_Core_Init(void);
 
+/* 门把手触发后开始一次四天线定位窗口，region_code 为触发门把手区域。 */
+void PKES_Core_StartHandleRanging(uint8_t region_code);
+
+/* 门把手触发定位窗口结束。 */
+void PKES_Core_EndHandleRanging(void);
+
+/* 在定位窗口结束前兜底判区：缺失天线按超远距离参与融合。 */
+void PKES_Core_FinalizeHandleRanging(uint32_t now_ms);
+
 /* 处理 LF 触发事件：发送 LF 唤醒并切换下一根天线。 */
 void PKES_Core_HandleLFEvent(void);
 

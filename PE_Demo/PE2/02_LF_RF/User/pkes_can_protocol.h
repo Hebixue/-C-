@@ -56,8 +56,8 @@ typedef enum
     PKES_REGION_LEFT_DOOR = 0x01u,
     PKES_REGION_RIGHT_DOOR = 0x02u,
     PKES_REGION_TRUNK = 0x03u,
-    PKES_REGION_INSIDE = 0x04u,
-    PKES_REGION_FAR = 0x05u,
+    PKES_REGION_FRONT = 0x04u,
+    PKES_REGION_INSIDE = 0x05u,
     PKES_REGION_BOUNDARY = 0x06u
 } pkes_region_code_t;
 

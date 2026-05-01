@@ -21,23 +21,20 @@ static void Lock_App_ApplyLedState(void)
 {
     if (s_lock_led_state == LOCK_APP_LED_UNLOCKED)
     {
-        LED1_ON;
-        LED2_ON;
         LED3_OFF;
     }
-    else if (s_lock_led_state == LOCK_APP_LED_LOCKED)
+    else
     {
-        LED1_OFF;
-        LED2_ON;
         LED3_ON;
     }
 }
 
 void Lock_App_Init(void)
 {
-    s_lock_state = PKES_LOCK_APP_IDLE;
-    s_lock_led_state = LOCK_APP_LED_NONE;
+    s_lock_state = PKES_LOCK_APP_UNLOCKING;
+    s_lock_led_state = LOCK_APP_LED_UNLOCKED;
     Lock_App_AllOff();
+    Lock_App_ApplyLedState();
 }
 
 void Lock_App_UnlockPulse(void)

@@ -14,6 +14,7 @@
 #define PKES_CORE_STANDBY_HEARTBEAT_TICKS 30u
 #define PKES_CORE_RSSI_SAMPLE_DEPTH 5u
 #define PKES_CORE_RSSI_DUP_WINDOW_MS 80u
+#define PKES_CORE_RANGING_WINDOW_MS 2000u
 #define KEY01_UNLOCK_SIG 0x63u
 #define KEY01_LOCK_SIG   0x62u
 
@@ -58,6 +59,9 @@ static uint8_t s_led1_ticks;
 static uint8_t s_led2_ticks;
 static uint8_t s_led3_ticks;
 static uint8_t s_idle_lf_ticks;
+static uint8_t s_handle_region_code;
+static uint8_t s_handle_ranging_active;
+static uint8_t s_region_decision_done;
 static pkes_core_antenna_rssi_t s_rssi_buffers[PKES_CORE_ANTENNA_COUNT];
 static pkes_core_antenna_distance_t s_distance_buffers[PKES_CORE_ANTENNA_COUNT];
 
@@ -255,6 +259,171 @@ static void PKES_Core_StoreDistanceSample(uint8_t ant_idx,
     }
 }
 
+static uint8_t PKES_Core_GetLatestDistanceSample(uint8_t ant_idx,
+                                                 pkes_ranging_result_t *result,
+                                                 uint32_t *timestamp_ms)
+{
+    pkes_core_antenna_distance_t *ant_buf = &s_distance_buffers[ant_idx];
+    uint8_t sample_idx;
+
+    if ((ant_buf->count == 0u) || (result == NULL) || (timestamp_ms == NULL))
+    {
+        return 0u;
+    }
+
+    sample_idx = (ant_buf->head == 0u) ? (PKES_CORE_RSSI_SAMPLE_DEPTH - 1u) : (uint8_t)(ant_buf->head - 1u);
+    if (ant_buf->samples[sample_idx].valid == 0u)
+    {
+        return 0u;
+    }
+
+    *result = ant_buf->samples[sample_idx].result;
+    *timestamp_ms = ant_buf->samples[sample_idx].timestamp_ms;
+    return 1u;
+}
+
+static uint8_t PKES_Core_CollectLatestDistances(pkes_ranging_result_t results[PKES_CORE_ANTENNA_COUNT],
+                                                uint16_t distance_cm[PKES_CORE_ANTENNA_COUNT],
+                                                uint16_t rssi_raw[PKES_CORE_ANTENNA_COUNT],
+                                                uint32_t now_ms,
+                                                uint8_t allow_missing,
+                                                uint8_t *valid_count)
+{
+    uint8_t ant;
+    uint8_t count = 0u;
+
+    for (ant = 0u; ant < PKES_CORE_ANTENNA_COUNT; ant++)
+    {
+        uint32_t sample_time_ms;
+
+        if ((PKES_Core_GetLatestDistanceSample(ant, &results[ant], &sample_time_ms) != 0u) &&
+            ((uint32_t)(now_ms - sample_time_ms) <= PKES_CORE_RANGING_WINDOW_MS))
+        {
+            distance_cm[ant] = results[ant].distance_cm;
+            if (rssi_raw != NULL)
+            {
+                rssi_raw[ant] = results[ant].rssi_raw;
+            }
+            count++;
+            continue;
+        }
+
+        if (allow_missing == 0u)
+        {
+            return 0u;
+        }
+
+        results[ant].rssi_raw = PKES_RANGING_MISSING_RSSI_RAW;
+        results[ant].distance_cm = PKES_RANGING_TOO_FAR_CM;
+        results[ant].distance_cm_x10 = (uint16_t)(PKES_RANGING_TOO_FAR_CM * 10u);
+        results[ant].antenna_id = (uint8_t)(ant + 1u);
+        results[ant].region_code = PKES_REGION_UNKNOWN;
+        results[ant].sample_cnt = 0u;
+        results[ant].in_calibration_range = 0u;
+        results[ant].range_state = PKES_RANGING_RANGE_TOO_FAR;
+        distance_cm[ant] = PKES_RANGING_TOO_FAR_CM;
+        if (rssi_raw != NULL)
+        {
+            rssi_raw[ant] = PKES_RANGING_MISSING_RSSI_RAW;
+        }
+    }
+
+    if (valid_count != NULL)
+    {
+        *valid_count = count;
+    }
+
+    return 1u;
+}
+
+static void PKES_Core_SendFusedDistances(const pkes_ranging_result_t results[PKES_CORE_ANTENNA_COUNT],
+                                         uint8_t region_code)
+{
+    uint8_t ant;
+
+    for (ant = 0u; ant < PKES_CORE_ANTENNA_COUNT; ant++)
+    {
+        CAN_App_SendDistance(results[ant].antenna_id,
+                             results[ant].distance_cm,
+                             region_code);
+    }
+}
+
+static void PKES_Core_ApplyHandleLockDecision(uint8_t region_code)
+{
+    uint8_t lock_state = Lock_App_GetState();
+    uint8_t unlock_allowed = 0u;
+
+    if ((s_handle_region_code == PKES_REGION_LEFT_DOOR) &&
+        (region_code == PKES_REGION_LEFT_DOOR))
+    {
+        unlock_allowed = 1u;
+    }
+    else if (region_code == PKES_REGION_INSIDE)
+    {
+        unlock_allowed = 1u;
+    }
+    else if ((s_handle_region_code == PKES_REGION_RIGHT_DOOR) &&
+             (region_code == PKES_REGION_RIGHT_DOOR))
+    {
+        unlock_allowed = 1u;
+    }
+
+    if (unlock_allowed != 0u)
+    {
+        if (lock_state != PKES_LOCK_APP_UNLOCKING)
+        {
+            Lock_App_UnlockPulse();
+        }
+        CAN_App_SendSysState(PKES_SYS_UNLOCK_DONE,
+                             PKES_STATUS_UNLOCK_DONE,
+                             region_code,
+                             0u,
+                             PKES_LOCK_UNLOCKED,
+                             PKES_TRIGGER_HANDLE,
+                             (uint8_t)(PKES_FLAG_DISTANCE_VALID | PKES_FLAG_REGION_VALID));
+    }
+    else
+    {
+        if (lock_state != PKES_LOCK_APP_LOCKING)
+        {
+            Lock_App_LockPulse();
+        }
+        CAN_App_SendSysState(PKES_SYS_LOCK_DONE,
+                             (region_code == PKES_REGION_UNKNOWN) ? PKES_STATUS_REGION_INVALID : PKES_STATUS_REGION_VALID,
+                             region_code,
+                             0u,
+                             PKES_LOCK_LOCKED,
+                             PKES_TRIGGER_HANDLE,
+                             (uint8_t)((region_code == PKES_REGION_UNKNOWN) ? PKES_FLAG_DISTANCE_VALID :
+                                       (PKES_FLAG_DISTANCE_VALID | PKES_FLAG_REGION_VALID)));
+    }
+}
+
+static void PKES_Core_TryHandleRegionDecision(uint32_t now_ms)
+{
+    pkes_ranging_result_t results[PKES_CORE_ANTENNA_COUNT];
+    uint16_t distance_cm[PKES_CORE_ANTENNA_COUNT];
+    uint16_t rssi_raw[PKES_CORE_ANTENNA_COUNT];
+    uint8_t region_code;
+    uint8_t valid_count;
+
+    if ((s_handle_ranging_active == 0u) || (s_region_decision_done != 0u))
+    {
+        return;
+    }
+
+    if (PKES_Core_CollectLatestDistances(results, distance_cm, rssi_raw, now_ms, 0u, &valid_count) == 0u)
+    {
+        return;
+    }
+
+    region_code = PKES_Ranging_DecideRegionFromRssi(rssi_raw, distance_cm);
+    PKES_Core_SendFusedDistances(results, region_code);
+    PKES_Core_ApplyHandleLockDecision(region_code);
+    s_region_decision_done = 1u;
+}
+
 static void PKES_Core_HandleRangingSample(uint8_t ant_array_idx,
                                           uint8_t antenna_id,
                                           uint16_t rssi,
@@ -275,10 +444,7 @@ static void PKES_Core_HandleRangingSample(uint8_t ant_array_idx,
                           &ranging_result);
 
     PKES_Core_StoreDistanceSample(ant_array_idx, &ranging_result, now_ms);
-
-    CAN_App_SendDistance(ranging_result.antenna_id,
-                         ranging_result.distance_cm,
-                         ranging_result.region_code);
+    PKES_Core_TryHandleRegionDecision(now_ms);
 }
 
 static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
@@ -378,11 +544,54 @@ void PKES_Core_Init(void)
     s_led2_ticks = 0u;
     s_led3_ticks = 0u;
     s_idle_lf_ticks = 0u;
+    s_handle_region_code = PKES_REGION_UNKNOWN;
+    s_handle_ranging_active = 0u;
+    s_region_decision_done = 0u;
     PKES_Core_ResetRssiBuffers();
     PKES_Core_ResetDistanceBuffers();
     active_antenna = s_antenna_list[s_ant_poll_idx];
 
     PKES_Core_SendStandbyState();
+}
+
+void PKES_Core_StartHandleRanging(uint8_t region_code)
+{
+    s_handle_region_code = region_code;
+    s_handle_ranging_active = 1u;
+    s_region_decision_done = 0u;
+    PKES_Core_ResetRssiBuffers();
+    PKES_Core_ResetDistanceBuffers();
+}
+
+void PKES_Core_EndHandleRanging(void)
+{
+    s_handle_region_code = PKES_REGION_UNKNOWN;
+    s_handle_ranging_active = 0u;
+    s_region_decision_done = 0u;
+}
+
+void PKES_Core_FinalizeHandleRanging(uint32_t now_ms)
+{
+    pkes_ranging_result_t results[PKES_CORE_ANTENNA_COUNT];
+    uint16_t distance_cm[PKES_CORE_ANTENNA_COUNT];
+    uint16_t rssi_raw[PKES_CORE_ANTENNA_COUNT];
+    uint8_t region_code;
+    uint8_t valid_count;
+
+    if ((s_handle_ranging_active == 0u) || (s_region_decision_done != 0u))
+    {
+        return;
+    }
+
+    if (PKES_Core_CollectLatestDistances(results, distance_cm, rssi_raw, now_ms, 1u, &valid_count) == 0u)
+    {
+        return;
+    }
+
+    region_code = (valid_count == 0u) ? PKES_REGION_UNKNOWN : PKES_Ranging_DecideRegionFromRssi(rssi_raw, distance_cm);
+    PKES_Core_SendFusedDistances(results, region_code);
+    PKES_Core_ApplyHandleLockDecision(region_code);
+    s_region_decision_done = 1u;
 }
 
 void PKES_Core_HandleLFEvent(void)
