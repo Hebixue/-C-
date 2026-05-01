@@ -6,7 +6,7 @@
 
 #define CAN_APP_REPEAT_COUNT 1u
 #define CAN_APP_REPEAT_DELAY_MS 100u
-#define CAN_APP_QUEUE_SIZE 8u
+#define CAN_APP_QUEUE_SIZE 16u
 
 typedef struct
 {
@@ -144,9 +144,7 @@ void CAN_App_SendKeyRssi(uint8_t key_id,
 
 void CAN_App_SendDistance(uint8_t antenna_id,
                           uint16_t dist_cm,
-                          uint8_t region_code,
-                          uint8_t confidence,
-                          uint8_t sample_cnt)
+                          uint8_t region_code)
 {
     uint8_t data[PKES_CAN_DLC];
     pkes_can_distance_t frame;
@@ -154,10 +152,10 @@ void CAN_App_SendDistance(uint8_t antenna_id,
     frame.antenna_id = antenna_id;
     PKES_CAN_SetDistanceCm(&frame, dist_cm);
     frame.region_code = region_code;
-    frame.confidence = confidence;
-    frame.sample_cnt = sample_cnt;
     frame.reserved0 = 0u;
     frame.reserved1 = 0u;
+    frame.reserved2 = 0u;
+    frame.reserved3 = 0u;
 
     PKES_CAN_PackDistance(&frame, data);
     CAN_App_Enqueue(PKES_CAN_ID_DISTANCE, data);

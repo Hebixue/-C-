@@ -178,8 +178,20 @@ void LD_RF_Recive(void)
 		{
 			uint8_t bit = (ones_cnt > (NRZ_SAMPLES_PER_BIT / 2)) ? 1u : 0u;
 
-			// MSB-first 打包：每收到1bit，左移写入
-			gRf_Buf[byte_idx] = (uint8_t)((gRf_Buf[byte_idx] << 1) | bit);
+			// MSB-first 打包：直接写入当前 bit 对应位置，避免连续左移累积。
+			{
+				uint8_t bit_pos = (uint8_t)(7u - (data_bit_cnt & 7u));
+				uint8_t bit_mask = (uint8_t)(1u << bit_pos);
+
+				if (bit != 0u)
+				{
+					gRf_Buf[byte_idx] = (uint8_t)(gRf_Buf[byte_idx] | bit_mask);
+				}
+				else
+				{
+					gRf_Buf[byte_idx] = (uint8_t)(gRf_Buf[byte_idx] & (uint8_t)(~bit_mask));
+				}
+			}
 			data_bit_cnt++;
 
 			if ((data_bit_cnt & 7u) == 0u)

@@ -460,6 +460,16 @@
               <FileType>5</FileType>
               <FilePath>.\User\pkes_core.h</FilePath>
             </File>
+            <File>
+              <FileName>pkes_ranging.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\User\pkes_ranging.c</FilePath>
+            </File>
+            <File>
+              <FileName>pkes_ranging.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\User\pkes_ranging.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

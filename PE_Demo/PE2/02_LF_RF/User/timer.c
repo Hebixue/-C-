@@ -110,7 +110,7 @@ void LF_TIMER_Init(void)
     /* TIMER 配置结构体参数设置 */
     timerConfig.timerMode = TIMER_PERIODIC_COUNTER;            /* 32bit 周期计数模式 */
     timerConfig.periodUnits = TIMER_PERIOD_UNITS_MICROSECONDS; /* 计数周期单位设为微秒(us) */
-    timerConfig.period = 85000U;                               /* 设定周期为 85000us，即 85ms LF 轮询节奏 */
+    timerConfig.period = 300000U;                              /* 设定周期为 300000us，即 300ms LF 轮询节奏 */
     timerConfig.triggerSource = TIMER_TRIGGER_SOURCE_INTERNAL; /* 选择内部触发源 */
     
     /* 触发源选择：选择通道0作为触发源。

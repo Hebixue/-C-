@@ -17,17 +17,20 @@ typedef enum
 /* 初始化继电器控制状态，并关闭开锁、闭锁和 MOS 使能输出。 */
 void Lock_App_Init(void);
 
-/* 触发一次开锁脉冲：Lockopen=1，Lockcolse=0，Lockmos=1。 */
+/* 开锁保持输出：Lockopen=1，Lockcolse=0，Lockmos=1。 */
 void Lock_App_UnlockPulse(void);
 
-/* 触发一次闭锁脉冲：Lockopen=0，Lockcolse=1，Lockmos=1。 */
+/* 闭锁保持输出：Lockopen=0，Lockcolse=1，Lockmos=1。 */
 void Lock_App_LockPulse(void);
 
 /* 立即停止继电器输出，三路控制脚全部拉低。 */
 void Lock_App_Stop(void);
 
-/* 定时节拍更新函数；主循环应在固定节拍中调用，用于自动撤销继电器脉冲。 */
+/* 定时节拍更新函数；继电器保持式输出下不自动断电。 */
 void Lock_App_UpdateTick(void);
+
+/* 重新输出当前锁状态 LED：开锁 LED1+LED2，闭锁 LED2+LED3。 */
+void Lock_App_RefreshLedState(void);
 
 /* 读取当前继电器控制状态，返回 pkes_lock_app_state_t。 */
 uint8_t Lock_App_GetState(void);

@@ -21,7 +21,17 @@
 #define LF_TIMER_START() TIMER_DRV_StartChannels(0, 1 << TIMER_CHANNEL_0)
 #define LF_TIMER_STOP() TIMER_DRV_StopChannels(0, 1 << TIMER_CHANNEL_0)
 #define ANTENNA_COUNT 4u
-#define HANDLE_LF_POLL_TICKS 18u
+#define HANDLE_LF_POLL_ROUNDS 1u
+#define HANDLE_LF_POLL_TICKS (ANTENNA_COUNT * HANDLE_LF_POLL_ROUNDS)
+#define APP_CORE_TICK_MS 300u
+#define DH_EVENT_LEFT_DRIVER 0x01u
+#define DH_EVENT_RIGHT_PASSENGER 0x04u
+
+typedef struct
+{
+    uint8_t event_mask;
+    uint8_t region_code;
+} dh_handle_position_t;
 
 /* ==========================================  Variables  =========================================== */
 extern uint8_t active_antenna;
@@ -34,6 +44,15 @@ static uint8_t buf[5];
 static uint8_t got_data;
 static uint8_t lf_poll_active;
 static uint8_t lf_poll_ticks;
+static uint8_t lf_poll_stop_pending;
+static uint8_t handle_region_code;
+static uint32_t app_tick_last_ms;
+
+static const dh_handle_position_t handle_position_map[] =
+{
+    {DH_EVENT_LEFT_DRIVER, PKES_REGION_LEFT_DOOR},
+    {DH_EVENT_RIGHT_PASSENGER, PKES_REGION_RIGHT_DOOR}
+};
 
 static void DelayLoop(volatile uint32_t count)
 {
@@ -101,7 +120,22 @@ static void DH_ClearEvent(void)
     lf_ata5293_SWRI(DHFCTL, 0x01);
 }
 
-static void DH_StartLFWindow(void)
+static uint8_t DH_GetHandleRegion(uint8_t event)
+{
+    uint8_t i;
+
+    for (i = 0u; i < (uint8_t)(sizeof(handle_position_map) / sizeof(handle_position_map[0])); i++)
+    {
+        if ((event & handle_position_map[i].event_mask) != 0u)
+        {
+            return handle_position_map[i].region_code;
+        }
+    }
+
+    return PKES_REGION_UNKNOWN;
+}
+
+static void DH_StartLFWindow(uint8_t region_code)
 {
     LF_TIMER_STOP();
     ATA5293_Disable();
@@ -109,6 +143,8 @@ static void DH_StartLFWindow(void)
 
     lf_poll_active = 1u;
     lf_poll_ticks = HANDLE_LF_POLL_TICKS;
+    lf_poll_stop_pending = 0u;
+    handle_region_code = region_code;
     ant_poll_idx = 0u;
     active_antenna = antenna_list[ant_poll_idx];
     LF_timerOutFlag = 1u;
@@ -121,7 +157,11 @@ static void DH_StopLFWindow(void)
     LF_timerOutFlag = 0u;
     lf_poll_active = 0u;
     lf_poll_ticks = 0u;
+    lf_poll_stop_pending = 0u;
+    handle_region_code = PKES_REGION_UNKNOWN;
     LED1_OFF;
+    LED2_OFF;
+    Lock_App_RefreshLedState();
 
     ATA5293_Disable();
     ATA5293_Enable();
@@ -144,6 +184,7 @@ int main(void)
     LF_TIMER_Init();
     LF_TIMER_STOP();
     RF_TIMER_Init();
+    app_tick_last_ms = TIMER_GetMillis();
     ATA5293_Enable();
     DH_Init();
     DH_ClearEvent();
@@ -154,11 +195,23 @@ int main(void)
     active_antenna = antenna_list[ant_poll_idx];
     lf_poll_active = 0u;
     lf_poll_ticks = 0u;
+    lf_poll_stop_pending = 0u;
+    handle_region_code = PKES_REGION_UNKNOWN;
     LED1_OFF;
+    LED2_OFF;
 
     while (1)
     {
+        uint32_t now_ms;
+
         CAN_App_Task();
+
+        now_ms = TIMER_GetMillis();
+        if ((uint32_t)(now_ms - app_tick_last_ms) >= APP_CORE_TICK_MS)
+        {
+            app_tick_last_ms = now_ms;
+            PKES_Core_UpdateTick();
+        }
 
         if (lf_poll_active == 0u)
         {
@@ -168,28 +221,43 @@ int main(void)
 
                 if (event != 0u)
                 {
+                    uint8_t region_code = DH_GetHandleRegion(event);
+
                     DH_ClearEvent();
 
-                    if ((event & 0x01u) != 0u)
+                    if ((event & DH_EVENT_LEFT_DRIVER) != 0u)
                     {
                         LED1_ON;
-                        DH_StartLFWindow();
+                    }
+                    if ((event & DH_EVENT_RIGHT_PASSENGER) != 0u)
+                    {
+                        LED2_ON;
+                    }
+                    if (region_code != PKES_REGION_UNKNOWN)
+                    {
+                        DH_StartLFWindow(region_code);
                     }
                 }
             }
         }
 
-        /* 门把手触发后的 LF 轮询窗口：85ms 一次，总计约 1.5s。 */
+        /* 门把手触发后，LF 定时器触发一次发一根天线，每根天线轮询 1 次。 */
         if (LF_timerOutFlag)
         {
             LF_timerOutFlag = 0u;
 
             if (lf_poll_active != 0u)
             {
+                if (lf_poll_stop_pending != 0u)
+                {
+                    DH_StopLFWindow();
+                    continue;
+                }
+
                 SendLFWakeUp();
                 CAN_App_SendSysState(PKES_SYS_LF_WAKEUP,
                                      PKES_STATUS_LF_WAKEUP_OK,
-                                     PKES_REGION_UNKNOWN,
+                                     handle_region_code,
                                      active_antenna,
                                      PKES_LOCK_KEEP,
                                      PKES_TRIGGER_HANDLE,
@@ -198,15 +266,13 @@ int main(void)
                 ant_poll_idx = (uint8_t)((ant_poll_idx + 1u) % ANTENNA_COUNT);
                 active_antenna = antenna_list[ant_poll_idx];
 
-                PKES_Core_UpdateTick();
-
                 if (lf_poll_ticks > 0u)
                 {
                     lf_poll_ticks--;
                 }
                 if (lf_poll_ticks == 0u)
                 {
-                    DH_StopLFWindow();
+                    lf_poll_stop_pending = 1u;
                 }
             }
         }
@@ -214,14 +280,19 @@ int main(void)
         /* RF 收包：保留原版 5 字节复制路径，解析与 CAN/继电器交给 pkes_core。 */
         if (gRFFull != 0u)
         {
-            uint8_t i;
-
-            for (i = 0u; i < 5u; i++)
+            DisableInterrupts;
+            if (gRFFull != 0u)
             {
-                buf[i] = gRf_Buf[i];
+                uint8_t i;
+
+                for (i = 0u; i < 5u; i++)
+                {
+                    buf[i] = gRf_Buf[i];
+                }
+                gRFFull = 0u;
+                got_data = 1u;
             }
-            gRFFull = 0u;
-            got_data = 1u;
+            EnableInterrupts;
         }
 
         if (got_data != 0u)

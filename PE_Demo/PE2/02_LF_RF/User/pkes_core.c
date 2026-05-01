@@ -4,6 +4,7 @@
 #include "pkes_can_app.h"
 #include "pkes_can_protocol.h"
 #include "pkes_lock_app.h"
+#include "pkes_ranging.h"
 #include "timer.h"
 #include <stddef.h>
 
@@ -13,6 +14,8 @@
 #define PKES_CORE_STANDBY_HEARTBEAT_TICKS 30u
 #define PKES_CORE_RSSI_SAMPLE_DEPTH 5u
 #define PKES_CORE_RSSI_DUP_WINDOW_MS 80u
+#define KEY01_UNLOCK_SIG 0x63u
+#define KEY01_LOCK_SIG   0x62u
 
 typedef struct
 {
@@ -20,6 +23,7 @@ typedef struct
     uint32_t timestamp_ms;
     uint8_t valid;
 } pkes_core_rssi_sample_t;
+
 
 typedef struct
 {
@@ -29,8 +33,21 @@ typedef struct
     uint16_t last_rssi;
     uint32_t last_time_ms;
     uint8_t last_valid;
-    uint8_t duplicate_count;
 } pkes_core_antenna_rssi_t;
+
+typedef struct
+{
+    pkes_ranging_result_t result;
+    uint32_t timestamp_ms;
+    uint8_t valid;
+} pkes_core_distance_sample_t;
+
+typedef struct
+{
+    pkes_core_distance_sample_t samples[PKES_CORE_RSSI_SAMPLE_DEPTH];
+    uint8_t head;
+    uint8_t count;
+} pkes_core_antenna_distance_t;
 
 extern void SendLFWakeUp(void);
 extern uint8_t active_antenna;
@@ -42,6 +59,7 @@ static uint8_t s_led2_ticks;
 static uint8_t s_led3_ticks;
 static uint8_t s_idle_lf_ticks;
 static pkes_core_antenna_rssi_t s_rssi_buffers[PKES_CORE_ANTENNA_COUNT];
+static pkes_core_antenna_distance_t s_distance_buffers[PKES_CORE_ANTENNA_COUNT];
 
 static void PKES_Core_SendStandbyState(void)
 {
@@ -79,6 +97,8 @@ static uint16_t PKES_Core_Crc16CcittFalse(const uint8_t *data, size_t len)
     return crc;
 }
 
+/* 临时标定阶段关闭 RF/RSSI LED 脉冲指示，只保留门把手和继电器状态灯。 */
+#if 0
 static void PKES_Core_StartLedPulse(uint8_t led_mask)
 {
     if ((led_mask & 0x01u) != 0u)
@@ -97,6 +117,7 @@ static void PKES_Core_StartLedPulse(uint8_t led_mask)
         s_led3_ticks = PKES_CORE_LED_PULSE_TICKS;
     }
 }
+#endif
 
 static void PKES_Core_UpdateLedPulse(void)
 {
@@ -140,13 +161,38 @@ static void PKES_Core_ResetRssiBuffers(void)
         s_rssi_buffers[ant].last_rssi = 0u;
         s_rssi_buffers[ant].last_time_ms = 0u;
         s_rssi_buffers[ant].last_valid = 0u;
-        s_rssi_buffers[ant].duplicate_count = 0u;
 
         for (sample = 0u; sample < PKES_CORE_RSSI_SAMPLE_DEPTH; sample++)
         {
             s_rssi_buffers[ant].samples[sample].rssi = 0u;
             s_rssi_buffers[ant].samples[sample].timestamp_ms = 0u;
             s_rssi_buffers[ant].samples[sample].valid = 0u;
+        }
+    }
+}
+
+static void PKES_Core_ResetDistanceBuffers(void)
+{
+    uint8_t ant;
+    uint8_t sample;
+
+    for (ant = 0u; ant < PKES_CORE_ANTENNA_COUNT; ant++)
+    {
+        s_distance_buffers[ant].head = 0u;
+        s_distance_buffers[ant].count = 0u;
+
+        for (sample = 0u; sample < PKES_CORE_RSSI_SAMPLE_DEPTH; sample++)
+        {
+            s_distance_buffers[ant].samples[sample].result.rssi_raw = 0u;
+            s_distance_buffers[ant].samples[sample].result.distance_cm = 0u;
+            s_distance_buffers[ant].samples[sample].result.distance_cm_x10 = 0u;
+            s_distance_buffers[ant].samples[sample].result.antenna_id = 0u;
+            s_distance_buffers[ant].samples[sample].result.region_code = PKES_REGION_UNKNOWN;
+            s_distance_buffers[ant].samples[sample].result.sample_cnt = 0u;
+            s_distance_buffers[ant].samples[sample].result.in_calibration_range = 0u;
+            s_distance_buffers[ant].samples[sample].result.range_state = PKES_RANGING_RANGE_VALID;
+            s_distance_buffers[ant].samples[sample].timestamp_ms = 0u;
+            s_distance_buffers[ant].samples[sample].valid = 0u;
         }
     }
 }
@@ -160,10 +206,6 @@ static uint8_t PKES_Core_IsDuplicateRssi(uint8_t ant_idx, uint16_t rssi, uint32_
         ((uint32_t)(now_ms - ant_buf->last_time_ms) <= PKES_CORE_RSSI_DUP_WINDOW_MS))
     {
         ant_buf->last_time_ms = now_ms;
-        if (ant_buf->duplicate_count < 0xFFu)
-        {
-            ant_buf->duplicate_count++;
-        }
         return 1u;
     }
 
@@ -188,7 +230,55 @@ static void PKES_Core_StoreRssiSample(uint8_t ant_idx, uint16_t rssi, uint32_t n
     ant_buf->last_rssi = rssi;
     ant_buf->last_time_ms = now_ms;
     ant_buf->last_valid = 1u;
-    ant_buf->duplicate_count = 0u;
+}
+
+static void PKES_Core_StoreDistanceSample(uint8_t ant_idx,
+                                          const pkes_ranging_result_t *result,
+                                          uint32_t now_ms)
+{
+    pkes_core_antenna_distance_t *ant_buf = &s_distance_buffers[ant_idx];
+    pkes_core_distance_sample_t *sample = &ant_buf->samples[ant_buf->head];
+
+    if (result == NULL)
+    {
+        return;
+    }
+
+    sample->result = *result;
+    sample->timestamp_ms = now_ms;
+    sample->valid = 1u;
+
+    ant_buf->head = (uint8_t)((ant_buf->head + 1u) % PKES_CORE_RSSI_SAMPLE_DEPTH);
+    if (ant_buf->count < PKES_CORE_RSSI_SAMPLE_DEPTH)
+    {
+        ant_buf->count++;
+    }
+}
+
+static void PKES_Core_HandleRangingSample(uint8_t ant_array_idx,
+                                          uint8_t antenna_id,
+                                          uint16_t rssi,
+                                          uint32_t now_ms)
+{
+    pkes_ranging_result_t ranging_result;
+    uint8_t next_sample_cnt = (uint8_t)(s_distance_buffers[ant_array_idx].count + 1u);
+
+    if (next_sample_cnt > PKES_CORE_RSSI_SAMPLE_DEPTH)
+    {
+        next_sample_cnt = PKES_CORE_RSSI_SAMPLE_DEPTH;
+    }
+
+    PKES_Ranging_Evaluate(antenna_id,
+                          rssi,
+                          next_sample_cnt,
+                          PKES_REGION_UNKNOWN,
+                          &ranging_result);
+
+    PKES_Core_StoreDistanceSample(ant_array_idx, &ranging_result, now_ms);
+
+    CAN_App_SendDistance(ranging_result.antenna_id,
+                         ranging_result.distance_cm,
+                         ranging_result.region_code);
 }
 
 static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
@@ -196,10 +286,11 @@ static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
     uint8_t sig1 = buf[1];
     uint8_t sig2 = buf[2];
 
-    if ((sig2 == 0xFFu) && (sig1 != 0xFFu))
+    if (sig1 == KEY01_UNLOCK_SIG)
     {
         Lock_App_UnlockPulse();
-        PKES_Core_StartLedPulse(0x07u);
+        /* 临时关闭遥控器开锁 LED 指示，只保留门把手触发点灯。 */
+        /* PKES_Core_StartLedPulse(0x07u); */
 
         CAN_App_SendSysState(PKES_SYS_UNLOCK_DONE,
                              PKES_STATUS_UNLOCK_CMD,
@@ -209,10 +300,11 @@ static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
                              PKES_TRIGGER_RF_UNLOCK,
                              (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
     }
-    else if ((sig1 == 0xFFu) && (sig2 != 0xFFu))
+    else if (sig2 == KEY01_LOCK_SIG)
     {
         Lock_App_LockPulse();
-        PKES_Core_StartLedPulse(0x06u);
+        /* 临时关闭遥控器闭锁 LED 指示，只保留门把手触发点灯。 */
+        /* PKES_Core_StartLedPulse(0x06u); */
 
         CAN_App_SendSysState(PKES_SYS_LOCK_DONE,
                              PKES_STATUS_LOCK_CMD,
@@ -232,28 +324,38 @@ static void PKES_Core_HandlePassiveRssiFrame(const uint8_t buf[5])
     uint8_t ant_array_idx = (uint8_t)(ant_idx - 1u);
     uint32_t now_ms = TIMER_GetMillis();
 
+    if (ant_array_idx >= PKES_CORE_ANTENNA_COUNT)
+    {
+        return;
+    }
+
     if (PKES_Core_IsDuplicateRssi(ant_array_idx, rssi_val, now_ms) != 0u)
     {
         return;
     }
 
     PKES_Core_StoreRssiSample(ant_array_idx, rssi_val, now_ms);
+    PKES_Core_HandleRangingSample(ant_array_idx, ant_idx, rssi_val, now_ms);
 
     if (ant_id == 0xA2u)
     {
-        PKES_Core_StartLedPulse(0x01u);
+        /* 临时关闭天线1 RSSI LED 指示，只保留门把手触发点灯。 */
+        /* PKES_Core_StartLedPulse(0x01u); */
     }
     if (ant_id == 0xA3u)
     {
-        PKES_Core_StartLedPulse(0x02u);
+        /* 临时关闭天线2 RSSI LED 指示，只保留门把手触发点灯。 */
+        /* PKES_Core_StartLedPulse(0x02u); */
     }
     if (ant_id == 0xA4u)
     {
-        PKES_Core_StartLedPulse(0x04u);
+        /* 临时关闭天线3 RSSI LED 指示，只保留门把手触发点灯。 */
+        /* PKES_Core_StartLedPulse(0x04u); */
     }
     if (ant_id == 0xA5u)
     {
-        PKES_Core_StartLedPulse(0x05u);
+        /* 临时关闭天线4 RSSI LED 指示，只保留门把手触发点灯。 */
+        /* PKES_Core_StartLedPulse(0x05u); */
     }
 
     CAN_App_SendKeyRssi((uint8_t)PKES_CORE_KEY_ID,
@@ -277,6 +379,7 @@ void PKES_Core_Init(void)
     s_led3_ticks = 0u;
     s_idle_lf_ticks = 0u;
     PKES_Core_ResetRssiBuffers();
+    PKES_Core_ResetDistanceBuffers();
     active_antenna = s_antenna_list[s_ant_poll_idx];
 
     PKES_Core_SendStandbyState();

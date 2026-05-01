@@ -26,9 +26,7 @@ void CAN_App_SendKeyRssi(uint8_t key_id,
 
 void CAN_App_SendDistance(uint8_t antenna_id,
                           uint16_t dist_cm,
-                          uint8_t region_code,
-                          uint8_t confidence,
-                          uint8_t sample_cnt);
+                          uint8_t region_code);
 
 #ifdef __cplusplus
 }

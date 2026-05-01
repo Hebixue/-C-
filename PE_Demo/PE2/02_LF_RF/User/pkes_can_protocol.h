@@ -131,18 +131,15 @@ typedef struct
 {
     /* Byte0：当前测距对应天线编号，使用代码编号 1~4。 */
     uint8_t antenna_id;
-    /* Byte1~Byte2：距离值，Distance_cm = (Byte1 << 8) | Byte2。 */
+    /* Byte1：距离整数米；Byte2：距离小数部分，单位 cm，Distance_m = Byte1.Byte2。 */
     uint8_t dist_h;
     uint8_t dist_l;
     /* Byte3：pkes_region_code_t 区域编码。 */
     uint8_t region_code;
-    /* Byte4：置信度，范围 0~100。 */
-    uint8_t confidence;
-    /* Byte5：本次结果使用的样本数量。 */
-    uint8_t sample_cnt;
-    /* Byte6~Byte7：保留字段，置 0。 */
     uint8_t reserved0;
     uint8_t reserved1;
+    uint8_t reserved2;
+    uint8_t reserved3;
 } pkes_can_distance_t;
 
 /* 将 0x301 结构体打包为 8 字节 CAN 数据。 */
@@ -178,23 +175,31 @@ static inline void PKES_CAN_PackDistance(const pkes_can_distance_t *src, uint8_t
     data[1] = src->dist_h;
     data[2] = src->dist_l;
     data[3] = src->region_code;
-    data[4] = src->confidence;
-    data[5] = src->sample_cnt;
-    data[6] = src->reserved0;
-    data[7] = src->reserved1;
+    data[4] = src->reserved0;
+    data[5] = src->reserved1;
+    data[6] = src->reserved2;
+    data[7] = src->reserved3;
 }
 
 /* 从已打包的 0x303 CAN 数据中读取距离值，单位 cm。 */
 static inline uint16_t PKES_CAN_GetDistanceCm(const uint8_t data[PKES_CAN_DLC])
 {
-    return (uint16_t)(((uint16_t)data[1] << 8) | data[2]);
+    return (uint16_t)(((uint16_t)data[1] * 100u) + data[2]);
 }
 
-/* 将 16 位厘米距离值拆分写入 0x303 距离高低字节。 */
+/* 将内部厘米距离转换为 0x303 的米格式：Byte1=整数米，Byte2=小数厘米。 */
 static inline void PKES_CAN_SetDistanceCm(pkes_can_distance_t *dst, uint16_t dist_cm)
 {
-    dst->dist_h = (uint8_t)((dist_cm >> 8) & 0xFFu);
-    dst->dist_l = (uint8_t)(dist_cm & 0xFFu);
+    uint16_t meter_int = (uint16_t)(dist_cm / 100u);
+
+    if (meter_int > 0xFFu)
+    {
+        meter_int = 0xFFu;
+        dist_cm = 0xFFFFu;
+    }
+
+    dst->dist_h = (uint8_t)meter_int;
+    dst->dist_l = (uint8_t)(dist_cm % 100u);
 }
 
 #endif /* PKES_CAN_PROTOCOL_H_ */
