@@ -81,6 +81,15 @@ typedef enum
     PKES_TRIGGER_RF_LOCK = 0x05u
 } pkes_trigger_src_t;
 
+/* 0x302 Byte4：命令码。 */
+typedef enum
+{
+    PKES_CMD_NONE = 0x00u,
+    PKES_CMD_PASSIVE_RESPONSE = 0x01u,
+    PKES_CMD_ACTIVE_RF_UNLOCK = 0x02u,
+    PKES_CMD_ACTIVE_RF_LOCK = 0x03u
+} pkes_cmd_code_t;
+
 /* 0x301 Byte7：标志位。 */
 #define PKES_FLAG_ID_OK         (1u << 0)
 #define PKES_FLAG_CRC_OK        (1u << 1)
@@ -99,13 +108,13 @@ typedef struct
     uint8_t status_code;
     /* Byte3：pkes_region_code_t 区域编码。 */
     uint8_t region_code;
-    /* Byte4：当前触发或参与测量的天线编号，使用代码编号 1~4。 */
+    /* Byte4：0=无单一天线/多天线综合结果，1~4=当前触发或参与测量的天线编号。 */
     uint8_t antenna_id;
     /* Byte5：pkes_lock_state_t 门锁状态。 */
     uint8_t lock_state;
     /* Byte6：pkes_trigger_src_t 触发源。 */
     uint8_t trigger_src;
-    /* Byte7：PKES_FLAG_* 标志位。 */
+    /* Byte7：bit0=ID合法，bit1=校验通过，bit2=RSSI有效，bit3=距离有效，bit4=区域有效。 */
     uint8_t flags;
 } pkes_can_sys_status_t;
 
@@ -119,8 +128,9 @@ typedef struct
     uint8_t rssi_h;
     /* Byte3：RSSI 对应天线编号，使用代码编号 1~4。 */
     uint8_t rssi_ant;
-    /* Byte4~Byte7：保留字段，置 0。 */
-    uint8_t reserved0;
+    /* Byte4：pkes_cmd_code_t 命令码。 */
+    uint8_t cmd;
+    /* Byte5~Byte7：保留字段，置 0。 */
     uint8_t reserved1;
     uint8_t reserved2;
     uint8_t reserved3;
@@ -162,7 +172,7 @@ static inline void PKES_CAN_PackKeyRssi(const pkes_can_key_rssi_t *src, uint8_t 
     data[1] = src->rssi_l;
     data[2] = src->rssi_h;
     data[3] = src->rssi_ant;
-    data[4] = src->reserved0;
+    data[4] = src->cmd;
     data[5] = src->reserved1;
     data[6] = src->reserved2;
     data[7] = src->reserved3;

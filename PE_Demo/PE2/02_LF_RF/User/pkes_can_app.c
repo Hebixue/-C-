@@ -6,7 +6,7 @@
 
 #define CAN_APP_REPEAT_COUNT 1u
 #define CAN_APP_REPEAT_DELAY_MS 100u
-#define CAN_APP_QUEUE_SIZE 16u
+#define CAN_APP_QUEUE_SIZE 64u
 
 typedef struct
 {
@@ -85,7 +85,11 @@ void CAN_App_Task(void)
         return;
     }
 
-    (void)CAN_SendData(0, s_active_frame.id, s_active_frame.data, PKES_CAN_DLC);
+    if (CAN_SendData(0, s_active_frame.id, s_active_frame.data, PKES_CAN_DLC) != STATUS_SUCCESS)
+    {
+        return;
+    }
+
     s_active_repeat_left--;
 
     if (s_active_repeat_left == 0u)
@@ -124,7 +128,8 @@ void CAN_App_SendSysState(uint8_t sys_state,
 
 void CAN_App_SendKeyRssi(uint8_t key_id,
                          uint16_t rssi,
-                         uint8_t rssi_ant)
+                         uint8_t rssi_ant,
+                         uint8_t cmd)
 {
     uint8_t data[PKES_CAN_DLC];
     pkes_can_key_rssi_t frame;
@@ -133,7 +138,7 @@ void CAN_App_SendKeyRssi(uint8_t key_id,
     frame.rssi_l = (uint8_t)(rssi & 0xFFu);
     frame.rssi_h = (uint8_t)((rssi >> 8) & 0xFFu);
     frame.rssi_ant = rssi_ant;
-    frame.reserved0 = 0u;
+    frame.cmd = cmd;
     frame.reserved1 = 0u;
     frame.reserved2 = 0u;
     frame.reserved3 = 0u;

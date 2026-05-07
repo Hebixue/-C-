@@ -10,6 +10,9 @@ extern "C" {
 /* 初始化 PKES 业务状态，例如默认 LF 天线编号和指示灯节拍。 */
 void PKES_Core_Init(void);
 
+/* 将继电器控制状态转换为 0x301 Byte5 的门锁状态。 */
+uint8_t PKES_Core_GetCanLockState(void);
+
 /* 门把手触发后开始一次四天线定位窗口，region_code 为触发门把手区域。 */
 void PKES_Core_StartHandleRanging(uint8_t region_code);
 

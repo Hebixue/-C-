@@ -22,7 +22,8 @@ void CAN_App_SendSysState(uint8_t sys_state,
 
 void CAN_App_SendKeyRssi(uint8_t key_id,
                          uint16_t rssi,
-                         uint8_t rssi_ant);
+                         uint8_t rssi_ant,
+                         uint8_t cmd);
 
 void CAN_App_SendDistance(uint8_t antenna_id,
                           uint16_t dist_cm,

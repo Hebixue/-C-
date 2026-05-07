@@ -65,13 +65,25 @@ static uint8_t s_region_decision_done;
 static pkes_core_antenna_rssi_t s_rssi_buffers[PKES_CORE_ANTENNA_COUNT];
 static pkes_core_antenna_distance_t s_distance_buffers[PKES_CORE_ANTENNA_COUNT];
 
+uint8_t PKES_Core_GetCanLockState(void)
+{
+    uint8_t lock_state = Lock_App_GetState();
+
+    if (lock_state == PKES_LOCK_APP_LOCKING)
+    {
+        return PKES_LOCK_LOCKED;
+    }
+
+    return PKES_LOCK_UNLOCKED;
+}
+
 static void PKES_Core_SendStandbyState(void)
 {
     CAN_App_SendSysState(PKES_SYS_STANDBY,
                          PKES_STATUS_NONE,
                          PKES_REGION_UNKNOWN,
                          0u,
-                         PKES_LOCK_KEEP,
+                         PKES_Core_GetCanLockState(),
                          PKES_TRIGGER_NONE,
                          0u);
 }
@@ -349,7 +361,34 @@ static void PKES_Core_SendFusedDistances(const pkes_ranging_result_t results[PKE
     }
 }
 
-static void PKES_Core_ApplyHandleLockDecision(uint8_t region_code)
+static uint8_t PKES_Core_BuildDistanceRegionFlags(uint8_t distance_valid, uint8_t region_code)
+{
+    uint8_t flags = 0u;
+
+    if (distance_valid != 0u)
+    {
+        flags |= PKES_FLAG_DISTANCE_VALID;
+    }
+    if (region_code != PKES_REGION_UNKNOWN)
+    {
+        flags |= PKES_FLAG_REGION_VALID;
+    }
+
+    return flags;
+}
+
+static void PKES_Core_SendRegionDoneState(uint8_t region_code, uint8_t distance_valid)
+{
+    CAN_App_SendSysState(PKES_SYS_REGION_DONE,
+                         (region_code == PKES_REGION_UNKNOWN) ? PKES_STATUS_REGION_INVALID : PKES_STATUS_REGION_VALID,
+                         region_code,
+                         0u,
+                         PKES_Core_GetCanLockState(),
+                         PKES_TRIGGER_HANDLE,
+                         PKES_Core_BuildDistanceRegionFlags(distance_valid, region_code));
+}
+
+static void PKES_Core_ApplyHandleLockDecision(uint8_t region_code, uint8_t distance_valid)
 {
     uint8_t lock_state = Lock_App_GetState();
     uint8_t unlock_allowed = 0u;
@@ -381,7 +420,7 @@ static void PKES_Core_ApplyHandleLockDecision(uint8_t region_code)
                              0u,
                              PKES_LOCK_UNLOCKED,
                              PKES_TRIGGER_HANDLE,
-                             (uint8_t)(PKES_FLAG_DISTANCE_VALID | PKES_FLAG_REGION_VALID));
+                             PKES_Core_BuildDistanceRegionFlags(distance_valid, region_code));
     }
     else
     {
@@ -390,13 +429,12 @@ static void PKES_Core_ApplyHandleLockDecision(uint8_t region_code)
             Lock_App_LockPulse();
         }
         CAN_App_SendSysState(PKES_SYS_LOCK_DONE,
-                             (region_code == PKES_REGION_UNKNOWN) ? PKES_STATUS_REGION_INVALID : PKES_STATUS_REGION_VALID,
+                             PKES_STATUS_LOCK_DONE,
                              region_code,
                              0u,
                              PKES_LOCK_LOCKED,
                              PKES_TRIGGER_HANDLE,
-                             (uint8_t)((region_code == PKES_REGION_UNKNOWN) ? PKES_FLAG_DISTANCE_VALID :
-                                       (PKES_FLAG_DISTANCE_VALID | PKES_FLAG_REGION_VALID)));
+                             PKES_Core_BuildDistanceRegionFlags(distance_valid, region_code));
     }
 }
 
@@ -420,7 +458,8 @@ static void PKES_Core_TryHandleRegionDecision(uint32_t now_ms)
 
     region_code = PKES_Ranging_DecideRegionFromRssi(rssi_raw, distance_cm);
     PKES_Core_SendFusedDistances(results, region_code);
-    PKES_Core_ApplyHandleLockDecision(region_code);
+    PKES_Core_SendRegionDoneState(region_code, 1u);
+    PKES_Core_ApplyHandleLockDecision(region_code, 1u);
     s_region_decision_done = 1u;
 }
 
@@ -444,6 +483,13 @@ static void PKES_Core_HandleRangingSample(uint8_t ant_array_idx,
                           &ranging_result);
 
     PKES_Core_StoreDistanceSample(ant_array_idx, &ranging_result, now_ms);
+    CAN_App_SendSysState(PKES_SYS_SINGLE_DISTANCE_DONE,
+                         PKES_STATUS_DISTANCE_VALID,
+                         PKES_REGION_UNKNOWN,
+                         antenna_id,
+                         PKES_Core_GetCanLockState(),
+                         PKES_TRIGGER_HANDLE,
+                         (uint8_t)(PKES_FLAG_RSSI_VALID | PKES_FLAG_DISTANCE_VALID));
     PKES_Core_TryHandleRegionDecision(now_ms);
 }
 
@@ -454,12 +500,31 @@ static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
 
     if (sig1 == KEY01_UNLOCK_SIG)
     {
+        CAN_App_SendSysState(PKES_SYS_TRIGGER_DETECTED,
+                             PKES_STATUS_NONE,
+                             PKES_REGION_UNKNOWN,
+                             0u,
+                             PKES_Core_GetCanLockState(),
+                             PKES_TRIGGER_RF_UNLOCK,
+                             (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
+        CAN_App_SendKeyRssi((uint8_t)PKES_CORE_KEY_ID,
+                            0u,
+                            0u,
+                            PKES_CMD_ACTIVE_RF_UNLOCK);
+        CAN_App_SendSysState(PKES_SYS_ID_AUTH_OK,
+                             PKES_STATUS_UNLOCK_CMD,
+                             PKES_REGION_UNKNOWN,
+                             0u,
+                             PKES_Core_GetCanLockState(),
+                             PKES_TRIGGER_RF_UNLOCK,
+                             (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
+
         Lock_App_UnlockPulse();
         /* 临时关闭遥控器开锁 LED 指示，只保留门把手触发点灯。 */
         /* PKES_Core_StartLedPulse(0x07u); */
 
         CAN_App_SendSysState(PKES_SYS_UNLOCK_DONE,
-                             PKES_STATUS_UNLOCK_CMD,
+                             PKES_STATUS_UNLOCK_DONE,
                              PKES_REGION_UNKNOWN,
                              0u,
                              PKES_LOCK_UNLOCKED,
@@ -468,17 +533,53 @@ static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
     }
     else if (sig2 == KEY01_LOCK_SIG)
     {
+        CAN_App_SendSysState(PKES_SYS_TRIGGER_DETECTED,
+                             PKES_STATUS_NONE,
+                             PKES_REGION_UNKNOWN,
+                             0u,
+                             PKES_Core_GetCanLockState(),
+                             PKES_TRIGGER_RF_LOCK,
+                             (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
+        CAN_App_SendKeyRssi((uint8_t)PKES_CORE_KEY_ID,
+                            0u,
+                            0u,
+                            PKES_CMD_ACTIVE_RF_LOCK);
+        CAN_App_SendSysState(PKES_SYS_ID_AUTH_OK,
+                             PKES_STATUS_LOCK_CMD,
+                             PKES_REGION_UNKNOWN,
+                             0u,
+                             PKES_Core_GetCanLockState(),
+                             PKES_TRIGGER_RF_LOCK,
+                             (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
+
         Lock_App_LockPulse();
         /* 临时关闭遥控器闭锁 LED 指示，只保留门把手触发点灯。 */
         /* PKES_Core_StartLedPulse(0x06u); */
 
         CAN_App_SendSysState(PKES_SYS_LOCK_DONE,
-                             PKES_STATUS_LOCK_CMD,
+                             PKES_STATUS_LOCK_DONE,
                              PKES_REGION_UNKNOWN,
                              0u,
                              PKES_LOCK_LOCKED,
                              PKES_TRIGGER_RF_LOCK,
                              (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
+    }
+    else
+    {
+        CAN_App_SendSysState(PKES_SYS_TRIGGER_DETECTED,
+                             PKES_STATUS_NONE,
+                             PKES_REGION_UNKNOWN,
+                             0u,
+                             PKES_Core_GetCanLockState(),
+                             PKES_TRIGGER_NONE,
+                             PKES_FLAG_CRC_OK);
+        CAN_App_SendSysState(PKES_SYS_ID_AUTH_FAIL,
+                             PKES_STATUS_UNKNOWN_ID,
+                             PKES_REGION_UNKNOWN,
+                             0u,
+                             PKES_Core_GetCanLockState(),
+                             PKES_TRIGGER_NONE,
+                             PKES_FLAG_CRC_OK);
     }
 }
 
@@ -501,6 +602,24 @@ static void PKES_Core_HandlePassiveRssiFrame(const uint8_t buf[5])
     }
 
     PKES_Core_StoreRssiSample(ant_array_idx, rssi_val, now_ms);
+    CAN_App_SendKeyRssi((uint8_t)PKES_CORE_KEY_ID,
+                        rssi_val,
+                        ant_idx,
+                        PKES_CMD_PASSIVE_RESPONSE);
+    CAN_App_SendSysState(PKES_SYS_RF_RECEIVED,
+                         PKES_STATUS_FRAME_VALID,
+                         PKES_REGION_UNKNOWN,
+                         ant_idx,
+                         PKES_Core_GetCanLockState(),
+                         PKES_TRIGGER_HANDLE,
+                         (uint8_t)(PKES_FLAG_CRC_OK | PKES_FLAG_RSSI_VALID));
+    CAN_App_SendSysState(PKES_SYS_RSSI_PROCESS,
+                         PKES_STATUS_FRAME_VALID,
+                         PKES_REGION_UNKNOWN,
+                         ant_idx,
+                         PKES_Core_GetCanLockState(),
+                         PKES_TRIGGER_HANDLE,
+                         (uint8_t)(PKES_FLAG_CRC_OK | PKES_FLAG_RSSI_VALID));
     PKES_Core_HandleRangingSample(ant_array_idx, ant_idx, rssi_val, now_ms);
 
     if (ant_id == 0xA2u)
@@ -523,18 +642,6 @@ static void PKES_Core_HandlePassiveRssiFrame(const uint8_t buf[5])
         /* 临时关闭天线4 RSSI LED 指示，只保留门把手触发点灯。 */
         /* PKES_Core_StartLedPulse(0x05u); */
     }
-
-    CAN_App_SendKeyRssi((uint8_t)PKES_CORE_KEY_ID,
-                        rssi_val,
-                        ant_idx);
-
-    CAN_App_SendSysState(PKES_SYS_RF_RECEIVED,
-                         PKES_STATUS_FRAME_VALID,
-                         PKES_REGION_UNKNOWN,
-                         ant_idx,
-                         PKES_LOCK_KEEP,
-                         PKES_TRIGGER_NONE,
-                         (uint8_t)(PKES_FLAG_CRC_OK | PKES_FLAG_RSSI_VALID));
 }
 
 void PKES_Core_Init(void)
@@ -590,7 +697,8 @@ void PKES_Core_FinalizeHandleRanging(uint32_t now_ms)
 
     region_code = (valid_count == 0u) ? PKES_REGION_UNKNOWN : PKES_Ranging_DecideRegionFromRssi(rssi_raw, distance_cm);
     PKES_Core_SendFusedDistances(results, region_code);
-    PKES_Core_ApplyHandleLockDecision(region_code);
+    PKES_Core_SendRegionDoneState(region_code, (valid_count == 0u) ? 0u : 1u);
+    PKES_Core_ApplyHandleLockDecision(region_code, (valid_count == 0u) ? 0u : 1u);
     s_region_decision_done = 1u;
 }
 
@@ -625,6 +733,23 @@ void PKES_Core_ProcessRFData(const uint8_t buf[5])
 
     if (crc_calc != crc_rx)
     {
+        if (buf[0] == 0x84u)
+        {
+            CAN_App_SendSysState(PKES_SYS_TRIGGER_DETECTED,
+                                 PKES_STATUS_NONE,
+                                 PKES_REGION_UNKNOWN,
+                                 0u,
+                                 PKES_Core_GetCanLockState(),
+                                 PKES_TRIGGER_NONE,
+                                 0u);
+            CAN_App_SendSysState(PKES_SYS_ID_AUTH_FAIL,
+                                 PKES_STATUS_CRC_ERROR,
+                                 PKES_REGION_UNKNOWN,
+                                 0u,
+                                 PKES_Core_GetCanLockState(),
+                                 PKES_TRIGGER_NONE,
+                                 0u);
+        }
         return;
     }
 

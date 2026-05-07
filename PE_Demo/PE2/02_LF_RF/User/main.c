@@ -45,7 +45,6 @@ static uint8_t got_data;
 static uint8_t lf_poll_active;
 static uint8_t lf_poll_ticks;
 static uint8_t lf_poll_stop_pending;
-static uint8_t handle_region_code;
 static uint32_t app_tick_last_ms;
 
 static const dh_handle_position_t handle_position_map[] =
@@ -144,7 +143,6 @@ static void DH_StartLFWindow(uint8_t region_code)
     lf_poll_active = 1u;
     lf_poll_ticks = HANDLE_LF_POLL_TICKS;
     lf_poll_stop_pending = 0u;
-    handle_region_code = region_code;
     ant_poll_idx = 0u;
     active_antenna = antenna_list[ant_poll_idx];
     LF_timerOutFlag = 1u;
@@ -158,7 +156,6 @@ static void DH_StopLFWindow(void)
     lf_poll_active = 0u;
     lf_poll_ticks = 0u;
     lf_poll_stop_pending = 0u;
-    handle_region_code = PKES_REGION_UNKNOWN;
     LED1_OFF;
     LED2_OFF;
     Lock_App_RefreshLedState();
@@ -198,7 +195,6 @@ int main(void)
     lf_poll_active = 0u;
     lf_poll_ticks = 0u;
     lf_poll_stop_pending = 0u;
-    handle_region_code = PKES_REGION_UNKNOWN;
     LED1_OFF;
     LED2_OFF;
 
@@ -237,6 +233,13 @@ int main(void)
                     }
                     if (region_code != PKES_REGION_UNKNOWN)
                     {
+                        CAN_App_SendSysState(PKES_SYS_TRIGGER_DETECTED,
+                                             PKES_STATUS_NONE,
+                                             PKES_REGION_UNKNOWN,
+                                             0u,
+                                             PKES_Core_GetCanLockState(),
+                                             PKES_TRIGGER_HANDLE,
+                                             0u);
                         PKES_Core_StartHandleRanging(region_code);
                         DH_StartLFWindow(region_code);
                     }
@@ -260,9 +263,16 @@ int main(void)
                     SendLFWakeUp();
                     CAN_App_SendSysState(PKES_SYS_LF_WAKEUP,
                                          PKES_STATUS_LF_WAKEUP_OK,
-                                         handle_region_code,
+                                         PKES_REGION_UNKNOWN,
                                          active_antenna,
-                                         PKES_LOCK_KEEP,
+                                         PKES_Core_GetCanLockState(),
+                                         PKES_TRIGGER_HANDLE,
+                                         0u);
+                    CAN_App_SendSysState(PKES_SYS_WAIT_RF,
+                                         PKES_STATUS_NONE,
+                                         PKES_REGION_UNKNOWN,
+                                         active_antenna,
+                                         PKES_Core_GetCanLockState(),
                                          PKES_TRIGGER_HANDLE,
                                          0u);
 
