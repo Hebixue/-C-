@@ -29,7 +29,7 @@
 #define RF_INVERT 0u
 
 // 前导干扰：30us高+200us低（可选处理：需要静默后再启动解码）
-#define PRE_SILENCE_US 150u                          // 要求至少 0.5ms 的稳定电平再开始找唤醒（建议）
+#define PRE_SILENCE_US 150u                          // 要求至少 150us 的稳定电平再开始找唤醒
 #define PRE_SILENCE_CNT (PRE_SILENCE_US / SAMPLE_US) // 20
 
 // 唤醒码：1100110011001100

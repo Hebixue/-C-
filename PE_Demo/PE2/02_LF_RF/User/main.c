@@ -159,7 +159,7 @@ static void DH_StopLFWindow(void)
     LED1_OFF;
     LED2_OFF;
     Lock_App_RefreshLedState();
-    PKES_Core_FinalizeHandleRanging(TIMER_GetMillis());
+    PKES_Core_FinalizeHandleRanging(TIMER_GetMillis());// 真正兜底逻辑
     PKES_Core_EndHandleRanging();
 
     ATA5293_Disable();
@@ -211,27 +211,31 @@ int main(void)
             PKES_Core_UpdateTick();
         }
 
-        if (lf_poll_active == 0u)
+        if (lf_poll_active == 0u)//当前没有 LF 轮询窗口
         {
-            if ((GPIO_DRV_ReadPins(IRQ_GPIO) & (1u << IRQ_PIN)) != 0u)
+            if ((GPIO_DRV_ReadPins(IRQ_GPIO) & (1u << IRQ_PIN)) != 0u)// 如果 IRQ 为高，说明 ATA5293 检测到门把手事件。
             {
-                uint8_t event = DH_GetEvent();
+                uint8_t event = DH_GetEvent();//通过 SPI 读取 ATA5293 的 DHES 门把手事件寄存器，当前代码只关心：左右门把手
 
-                if (event != 0u)
+                if (event != 0u)// 确认确实读到了有效事件。
                 {
                     uint8_t region_code = DH_GetHandleRegion(event);
+															/*把门把手事件转换成业务区域：
+																左门事件 -> PKES_REGION_LEFT_DOOR
+																右门事件 -> PKES_REGION_RIGHT_DOOR
+																其他 -> PKES_REGION_UNKNOWN
+																								*/
+                    DH_ClearEvent();//清除 ATA5293 内部的门把手事件标志
 
-                    DH_ClearEvent();
-
-                    if ((event & DH_EVENT_LEFT_DRIVER) != 0u)
+                    if ((event & DH_EVENT_LEFT_DRIVER) != 0u)//左门触发：LED1 亮
                     {
                         LED1_ON;
                     }
-                    if ((event & DH_EVENT_RIGHT_PASSENGER) != 0u)
+                    if ((event & DH_EVENT_RIGHT_PASSENGER) != 0u)//右门触发：LED2 亮
                     {
                         LED2_ON;
                     }
-                    if (region_code != PKES_REGION_UNKNOWN)
+                    if (region_code != PKES_REGION_UNKNOWN)//只有能识别出是左门或右门，才启动后续 PKES 流程。
                     {
                         CAN_App_SendSysState(PKES_SYS_TRIGGER_DETECTED,
                                              PKES_STATUS_NONE,
@@ -242,6 +246,11 @@ int main(void)
                                              0u);
                         PKES_Core_StartHandleRanging(region_code);
                         DH_StartLFWindow(region_code);
+											/*
+											先通过 CAN 上报：检测到门把手触发
+											 通知 PKES 核心：开始一次门把手触发的测距/判区流程。这里会清空之前的 RSSI、距离缓存，并记录“这次是左门还是右门触发”
+											 启动 LF 低频唤醒窗口。它会复位 ATA5293，设置第一根天线，置 LF_timerOutFlag = 1，启动 300ms LF 定时器。后面主循环就会开始按天线 1、2、3、4 发送 LF 唤醒。
+											*/
                     }
                 }
             }
@@ -260,7 +269,7 @@ int main(void)
                 }
                 else
                 {
-                    SendLFWakeUp();
+                    SendLFWakeUp();//通过 ATA5293 发低频唤醒包，它会根据当前全局变量 active_antenna 选择天线
                     CAN_App_SendSysState(PKES_SYS_LF_WAKEUP,
                                          PKES_STATUS_LF_WAKEUP_OK,
                                          PKES_REGION_UNKNOWN,
@@ -275,8 +284,8 @@ int main(void)
                                          PKES_Core_GetCanLockState(),
                                          PKES_TRIGGER_HANDLE,
                                          0u);
-
-                    ant_poll_idx = (uint8_t)((ant_poll_idx + 1u) % ANTENNA_COUNT);
+									//上面报文的意思是当前天线 LF 唤醒已发送。等待钥匙 RF 回包。
+                    ant_poll_idx = (uint8_t)((ant_poll_idx + 1u) % ANTENNA_COUNT);//然后切换到下一根天线：
                     active_antenna = antenna_list[ant_poll_idx];
 
                     if (lf_poll_ticks > 0u)
@@ -309,13 +318,13 @@ int main(void)
             EnableInterrupts;
         }
 
-        if (got_data != 0u)
+        if (got_data != 0u)//真正处理 RF 帧
         {
             PKES_Core_ProcessRFData(buf);
             got_data = 0u;
         }
 
-        if (lf_poll_stop_pending == 2u)
+        if (lf_poll_stop_pending == 2u)//这是 LF 轮询窗口收尾。存在一个兜底逻辑，当存在某个天线数据未接收的时候，认为他是超远距离
         {
             DH_StopLFWindow();
         }

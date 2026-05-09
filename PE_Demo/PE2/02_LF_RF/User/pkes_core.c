@@ -438,7 +438,7 @@ static void PKES_Core_ApplyHandleLockDecision(uint8_t region_code, uint8_t dista
     }
 }
 
-static void PKES_Core_TryHandleRegionDecision(uint32_t now_ms)
+static void PKES_Core_TryHandleRegionDecision(uint32_t now_ms)//最终区域判断和开闭锁决策的函数
 {
     pkes_ranging_result_t results[PKES_CORE_ANTENNA_COUNT];
     uint16_t distance_cm[PKES_CORE_ANTENNA_COUNT];
@@ -456,17 +456,17 @@ static void PKES_Core_TryHandleRegionDecision(uint32_t now_ms)
         return;
     }
 
-    region_code = PKES_Ranging_DecideRegionFromRssi(rssi_raw, distance_cm);
-    PKES_Core_SendFusedDistances(results, region_code);
-    PKES_Core_SendRegionDoneState(region_code, 1u);
-    PKES_Core_ApplyHandleLockDecision(region_code, 1u);
+    region_code = PKES_Ranging_DecideRegionFromRssi(rssi_raw, distance_cm);//调用判区算法
+    PKES_Core_SendFusedDistances(results, region_code);//把 4 根天线的距离结果通过 CAN 发出去。
+    PKES_Core_SendRegionDoneState(region_code, 1u);//通过 CAN 上报“区域判断完成”。
+    PKES_Core_ApplyHandleLockDecision(region_code, 1u);//根据判出来的区域执行开锁或闭锁。
     s_region_decision_done = 1u;
 }
 
 static void PKES_Core_HandleRangingSample(uint8_t ant_array_idx,
                                           uint8_t antenna_id,
                                           uint16_t rssi,
-                                          uint32_t now_ms)
+                                          uint32_t now_ms)//被动开锁路径里“收到钥匙 RSSI 回包后”的核心处理函数。
 {
     pkes_ranging_result_t ranging_result;
     uint8_t next_sample_cnt = (uint8_t)(s_distance_buffers[ant_array_idx].count + 1u);
@@ -474,31 +474,32 @@ static void PKES_Core_HandleRangingSample(uint8_t ant_array_idx,
     if (next_sample_cnt > PKES_CORE_RSSI_SAMPLE_DEPTH)
     {
         next_sample_cnt = PKES_CORE_RSSI_SAMPLE_DEPTH;
-    }
+    }//限制最大值，因此我最大只标定到了180cm
 
     PKES_Ranging_Evaluate(antenna_id,
                           rssi,
                           next_sample_cnt,
                           PKES_REGION_UNKNOWN,
-                          &ranging_result);
+                          &ranging_result);//函数会把 RSSI 转成距离，填入 ranging_result：
 
-    PKES_Core_StoreDistanceSample(ant_array_idx, &ranging_result, now_ms);
+    PKES_Core_StoreDistanceSample(ant_array_idx, &ranging_result, now_ms);//保存这个距离样本。它会把结果存到对应天线的环形缓存里。每根天线最多保存 5 个最近距离样本。
     CAN_App_SendSysState(PKES_SYS_SINGLE_DISTANCE_DONE,
                          PKES_STATUS_DISTANCE_VALID,
                          PKES_REGION_UNKNOWN,
                          antenna_id,
                          PKES_Core_GetCanLockState(),
                          PKES_TRIGGER_HANDLE,
-                         (uint8_t)(PKES_FLAG_RSSI_VALID | PKES_FLAG_DISTANCE_VALID));
-    PKES_Core_TryHandleRegionDecision(now_ms);
+                         (uint8_t)(PKES_FLAG_RSSI_VALID | PKES_FLAG_DISTANCE_VALID));// CAN 上报单天线距离完成
+		
+    PKES_Core_TryHandleRegionDecision(now_ms);//它会尝试做最终四天线判区。
 }
 
-static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
+static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])//主动遥控钥匙帧处理函数
 {
     uint8_t sig1 = buf[1];
     uint8_t sig2 = buf[2];
 
-    if (sig1 == KEY01_UNLOCK_SIG)
+    if (sig1 == KEY01_UNLOCK_SIG)//主动开锁
     {
         CAN_App_SendSysState(PKES_SYS_TRIGGER_DETECTED,
                              PKES_STATUS_NONE,
@@ -519,7 +520,8 @@ static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
                              PKES_TRIGGER_RF_UNLOCK,
                              (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
 
-        Lock_App_UnlockPulse();
+        Lock_App_UnlockPulse();//开锁函数
+			
         /* 临时关闭遥控器开锁 LED 指示，只保留门把手触发点灯。 */
         /* PKES_Core_StartLedPulse(0x07u); */
 
@@ -552,7 +554,8 @@ static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
                              PKES_TRIGGER_RF_LOCK,
                              (uint8_t)(PKES_FLAG_ID_OK | PKES_FLAG_CRC_OK));
 
-        Lock_App_LockPulse();
+        Lock_App_LockPulse();//闭锁函数
+			
         /* 临时关闭遥控器闭锁 LED 指示，只保留门把手触发点灯。 */
         /* PKES_Core_StartLedPulse(0x06u); */
 
@@ -583,8 +586,9 @@ static void PKES_Core_HandleActiveKeyFrame(const uint8_t buf[5])
     }
 }
 
-static void PKES_Core_HandlePassiveRssiFrame(const uint8_t buf[5])
+static void PKES_Core_HandlePassiveRssiFrame(const uint8_t buf[5])//被动 RSSI 回包处理函数
 {
+	//这里解析 RF 帧：
     uint8_t ant_id = buf[0];
     uint16_t rssi_val = (uint16_t)(((uint16_t)buf[2] << 8) | buf[1]);
     uint8_t ant_idx = (uint8_t)(ant_id - 0xA1u);
@@ -620,7 +624,8 @@ static void PKES_Core_HandlePassiveRssiFrame(const uint8_t buf[5])
                          PKES_Core_GetCanLockState(),
                          PKES_TRIGGER_HANDLE,
                          (uint8_t)(PKES_FLAG_CRC_OK | PKES_FLAG_RSSI_VALID));
-    PKES_Core_HandleRangingSample(ant_array_idx, ant_idx, rssi_val, now_ms);
+		
+    PKES_Core_HandleRangingSample(ant_array_idx, ant_idx, rssi_val, now_ms);//正儿八经的测距处理判定区域
 
     if (ant_id == 0xA2u)
     {
@@ -690,7 +695,7 @@ void PKES_Core_FinalizeHandleRanging(uint32_t now_ms)
         return;
     }
 
-    if (PKES_Core_CollectLatestDistances(results, distance_cm, rssi_raw, now_ms, 1u, &valid_count) == 0u)
+    if (PKES_Core_CollectLatestDistances(results, distance_cm, rssi_raw, now_ms, 1u, &valid_count) == 0u)//允许缺失天线。缺失天线会被补成：180cm
     {
         return;
     }
@@ -724,14 +729,14 @@ void PKES_Core_UpdateTick(void)
     }
 }
 
-void PKES_Core_ProcessRFData(const uint8_t buf[5])
+void PKES_Core_ProcessRFData(const uint8_t buf[5])//按 buf[0] 分两类,分主动开锁和被动开锁
 {
     uint16_t crc_calc = PKES_Core_Crc16CcittFalse(buf, 3u);
     uint16_t crc_rx = (uint16_t)buf[3] | ((uint16_t)buf[4] << 8);
 
     s_idle_lf_ticks = 0u;
 
-    if (crc_calc != crc_rx)
+	if (crc_calc != crc_rx)//如果RCR校验不通过，直接return
     {
         if (buf[0] == 0x84u)
         {
@@ -753,11 +758,11 @@ void PKES_Core_ProcessRFData(const uint8_t buf[5])
         return;
     }
 
-    if (buf[0] == 0x84u)
+    if (buf[0] == 0x84u)//主动遥控帧
     {
         PKES_Core_HandleActiveKeyFrame(buf);
     }
-    else if ((buf[0] >= 0xA2u) && (buf[0] <= 0xA5u))
+    else if ((buf[0] >= 0xA2u) && (buf[0] <= 0xA5u))//处理被动 RSSI 回包
     {
         PKES_Core_HandlePassiveRssiFrame(buf);
     }

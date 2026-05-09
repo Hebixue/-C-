@@ -19,7 +19,7 @@
  */
 void GPIO_Inits(void)
 {
-    // ATA5296
+    // ATA5293
     //  NRES
     GPIO_DRV_SetMuxModeSel(NRES_PORT, NRES_PIN, PORT_MUX_AS_GPIO);        /*NRES���ܸ���ѡ��*/
     GPIO_DRV_SetPinDirection(NRES_GPIO, NRES_PIN, GPIO_OUTPUT_DIRECTION); /*NRES����GPIOΪ���*/

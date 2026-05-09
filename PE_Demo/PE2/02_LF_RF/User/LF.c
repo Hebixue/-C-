@@ -46,7 +46,7 @@ void SendLFWakeUp(void)
   DriverOutput(DRIVER_A30, POSITIVE_POLARITY_WAVEFORM, SINE_WAVE, PATH0);   // Ant1 SE
   DriverOutput(DRIVER_A02, POSITIVE_POLARITY_WAVEFORM, SINE_WAVE, PATH0);   // Ant2 SE
   DriverOutput(DRIVER_A31, POSITIVE_POLARITY_WAVEFORM, SINE_WAVE, PATH0);   // Ant3 SE
-  DriverOutput(DRIVER_A10, POSITIVE_POLARITY_WAVEFORM, SQUARE_WAVE, PATH0); // Ant4 SE
+  DriverOutput(DRIVER_A10, POSITIVE_POLARITY_WAVEFORM, SINE_WAVE, PATH0);   // Ant4 SE
 
   // Configure waveform and data
   lf_ata5293_SWRI(TXMOD, (Cordic | f_125));    // 生成频率可调的125kHz载波，曼切斯特编码下降沿为0，上升沿为1

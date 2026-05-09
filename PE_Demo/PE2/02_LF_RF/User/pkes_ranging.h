@@ -11,7 +11,7 @@ extern "C" {
 #define PKES_RANGING_MIN_CM 9u
 #define PKES_RANGING_MAX_CM 179u
 #define PKES_RANGING_TOO_FAR_CM 180u
-#define PKES_RANGING_MISSING_RSSI_RAW 616u
+#define PKES_RANGING_MISSING_RSSI_RAW 560u
 
 /* 4-antenna decision thresholds, unit: cm. */
 #define PKES_RANGING_AXIS_CENTER_CM 40u

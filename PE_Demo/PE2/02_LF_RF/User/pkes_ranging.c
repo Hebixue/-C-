@@ -2,10 +2,10 @@
 
 #include <stddef.h>
 
-#define PKES_RANGING_TABLE_SIZE 29u
+#define PKES_RANGING_TABLE_SIZE 26u
 #define PKES_RANGING_TEMPLATE_ZONE_COUNT 5u
 #define PKES_RANGING_TEMPLATE_K 9u
-#define PKES_RANGING_TEMPLATE_ACCEPT_PERCENT 85u
+#define PKES_RANGING_TEMPLATE_ACCEPT_PERCENT 100u
 #define PKES_RANGING_INSIDE_K 9u
 #define PKES_RANGING_INSIDE_ACCEPT_PERCENT 80u
 #define PKES_RANGING_INSIDE_MAX_CM 135u
@@ -31,35 +31,32 @@ typedef struct
  */
 static const pkes_ranging_point_t s_rssi_distance_table[PKES_RANGING_TABLE_SIZE] =
 {
-    {90u, 5453u},
-    {140u, 5124u},
-    {190u, 4507u},
-    {240u, 4418u},
-    {290u, 4343u},
-    {340u, 3700u},
-    {390u, 3472u},
-    {440u, 3280u},
-    {490u, 3126u},
-    {540u, 3013u},
-    {590u, 2909u},
-    {640u, 2349u},
-    {690u, 2219u},
-    {740u, 2118u},
-    {790u, 2043u},
-    {840u, 1955u},
-    {890u, 1884u},
-    {940u, 1818u},
-    {990u, 1738u},
-    {1040u, 1702u},
-    {1090u, 1630u},
-    {1140u, 1572u},
-    {1190u, 1527u},
-    {1240u, 1492u},
-    {1290u, 1458u},
-    {1390u, 1370u},
-    {1490u, 1310u},
-    {1590u, 1249u},
-    {1790u, 1232u}
+    {90u, 5762u},
+    {140u, 5024u},
+    {190u, 4498u},
+    {240u, 4248u},
+    {290u, 4172u},
+    {340u, 3602u},
+    {390u, 3420u},
+    {440u, 3260u},
+    {490u, 3102u},
+    {540u, 2966u},
+    {590u, 2854u},
+    {640u, 2280u},
+    {690u, 2160u},
+    {740u, 2050u},
+    {790u, 1960u},
+    {840u, 1880u},
+    {890u, 1800u},
+    {990u, 1672u},
+    {1090u, 1554u},
+    {1190u, 1460u},
+    {1290u, 1388u},
+    {1390u, 1320u},
+    {1490u, 1260u},
+    {1590u, 1200u},
+    {1690u, 1160u},
+    {1790u, 1120u}
 };
 
 static uint16_t PKES_Ranging_ClampDistanceCmX10(uint16_t rssi_x2)
@@ -94,7 +91,7 @@ uint8_t PKES_Ranging_GetRangeState(uint16_t rssi_raw)
     return PKES_RANGING_RANGE_VALID;
 }
 
-uint16_t PKES_Ranging_RssiToDistanceCmX10(uint16_t rssi_raw)
+uint16_t PKES_Ranging_RssiToDistanceCmX10(uint16_t rssi_raw)// 距离转换函数
 {
     uint16_t rssi_x2 = (uint16_t)(rssi_raw * 2u);
     uint8_t i;
@@ -197,12 +194,14 @@ static uint32_t PKES_Ranging_TemplateRawSumScore4(const uint16_t rssi_raw[4],
     tmpl_sum = (uint32_t)tmpl->rssi[0] + (uint32_t)tmpl->rssi[1] +
                (uint32_t)tmpl->rssi[2] + (uint32_t)tmpl->rssi[3];
 
-    /* raw_sum feature: [A1,A2,A3,A4, 0.25 * sum]. Multiply by 4 to stay integer. */
+    /* 车外模板评分增加一个派生特征：四根天线 RSSI 平均强度。
+     * 为避免浮点运算，等价特征 [A1,A2,A3,A4,0.25*sum] 统一乘 4 计算。
+     */
     return (raw_score * 4u) + ((sample_sum >= tmpl_sum) ? (sample_sum - tmpl_sum) : (tmpl_sum - sample_sum));
 }
 
 static uint32_t PKES_Ranging_TemplateRawScore(const uint16_t rssi_raw[4],
-                                              const uint16_t tmpl_rssi[4])
+                                               const uint16_t tmpl_rssi[4])
 {
     return PKES_Ranging_AbsDiffU16(rssi_raw[0], tmpl_rssi[0]) +
            PKES_Ranging_AbsDiffU16(rssi_raw[1], tmpl_rssi[1]) +
@@ -260,9 +259,9 @@ static uint8_t PKES_Ranging_IsInsideByTemplate(const uint16_t rssi_raw[4],
 }
 
 uint8_t PKES_Ranging_DecideRegionFromRssi(const uint16_t rssi_raw[4],
-                                          const uint16_t distance_cm[4])
+                                          const uint16_t distance_cm[4])//最终区域判断函数
 {
-    uint32_t best_scores[PKES_RANGING_TEMPLATE_ZONE_COUNT][PKES_RANGING_TEMPLATE_K];
+    uint32_t best_scores[PKES_RANGING_TEMPLATE_ZONE_COUNT][PKES_RANGING_TEMPLATE_K];//给每个区域准备一个 best-K 分数数组
     uint32_t zone_scores[PKES_RANGING_TEMPLATE_ZONE_COUNT];
     uint32_t best_zone_score = PKES_RANGING_SCORE_INVALID;
     uint8_t best_region = PKES_REGION_UNKNOWN;
@@ -275,12 +274,12 @@ uint8_t PKES_Ranging_DecideRegionFromRssi(const uint16_t rssi_raw[4],
         return PKES_REGION_UNKNOWN;
     }
 
-    if (PKES_Ranging_IsInsideByTemplate(rssi_raw, distance_cm) != 0u)
+    if (PKES_Ranging_IsInsideByTemplate(rssi_raw, distance_cm) != 0u)//先判断是不是车内
     {
         return PKES_REGION_INSIDE;
     }
 
-    for (zone = 0u; zone < PKES_RANGING_TEMPLATE_ZONE_COUNT; zone++)
+    for (zone = 0u; zone < PKES_RANGING_TEMPLATE_ZONE_COUNT; zone++)//初始化 best_scores。
     {
         for (i = 0u; i < PKES_RANGING_TEMPLATE_K; i++)
         {
@@ -288,7 +287,7 @@ uint8_t PKES_Ranging_DecideRegionFromRssi(const uint16_t rssi_raw[4],
         }
     }
 
-    for (tmpl_idx = 0u; tmpl_idx < PKES_RSSI_TEMPLATE_5CM_COUNT; tmpl_idx++)
+    for (tmpl_idx = 0u; tmpl_idx < PKES_RSSI_TEMPLATE_5CM_COUNT; tmpl_idx++)//开始遍历整张车外模板表。
     {
         const pkes_rssi_template_t *tmpl = &s_pkes_rssi_template_5cm[tmpl_idx];
         uint8_t region = tmpl->region_code;
@@ -319,10 +318,10 @@ uint8_t PKES_Ranging_DecideRegionFromRssi(const uint16_t rssi_raw[4],
         return PKES_REGION_UNKNOWN;
     }
 
-    /* Accept valid zones only when best valid score is at least 15% better than MASK. */
-    if ((best_zone_score * 100u) > (zone_scores[PKES_REGION_UNKNOWN] * PKES_RANGING_TEMPLATE_ACCEPT_PERCENT))
+    /* Accept valid zones when they beat MASK; 100% means no extra MASK margin. */
+    if ((best_zone_score * 100u) > (zone_scores[PKES_REGION_UNKNOWN] * PKES_RANGING_TEMPLATE_ACCEPT_PERCENT))//这是有效区域和 UNKNOWN 区域之间的二次确认。
     {
-        return PKES_REGION_UNKNOWN;
+        return PKES_REGION_UNKNOWN;//有效区域必须至少不比 UNKNOWN 差，才接受。
     }
 
     return best_region;
@@ -333,7 +332,7 @@ uint8_t PKES_Ranging_DecideRegion(uint8_t region_hint, uint16_t distance_cm)
     (void)region_hint;
     (void)distance_cm;
 
-    /* 区域/距离判断策略暂未标定，0x303 Byte3 暂时固定上报 0x00。 */
+    /* 单天线距离结果不直接判区；最终区域由四天线 RSSI 模板融合给出。 */
     return PKES_REGION_UNKNOWN;
 }
 

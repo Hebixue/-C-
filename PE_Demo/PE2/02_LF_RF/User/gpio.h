@@ -33,7 +33,7 @@ extern "C"
 #define LED3_GPIO (GPIOD)
 #define LED3_PIN (1)
 
-// ATA5296 GPIO定义
+// ATA5293 GPIO定义
 #define NRES_PORT (PORTE)
 #define NRES_GPIO (GPIOE)
 #define NRES_PIN (11)

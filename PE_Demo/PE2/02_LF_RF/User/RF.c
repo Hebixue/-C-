@@ -10,7 +10,7 @@ typedef enum
 {
 	RF_ST_IDLE = 0, // 等待稳定静默
 	RF_ST_WAKE = 1, // 采样判唤醒码 0xCCCC
-	RF_ST_SYNC = 2, // 等待 8ms 固定电平
+	RF_ST_SYNC = 2, // 等待 4ms 固定电平
 	RF_ST_DATA = 3	// 采样判数据
 } rf_state_t;
 
